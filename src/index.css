@@ -1,0 +1,78 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Uma curva e uma duração para tudo. */
+  --default-transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  --default-transition-duration: 150ms;
+
+  /* Vermelho institucional do brasão do MPTO: gravação e selo. */
+  --color-seal-700: #8c1224;
+  --color-seal-600: #a9172c;
+  --color-seal-500: #c02439;
+  --color-seal-300: #e58a95;
+  --color-seal-200: #f2b9c0;
+
+  /* Latão do brasão: o lacre e nada mais. */
+  --color-brass-600: #a8861f;
+  --color-brass-500: #c9a227;
+  --color-brass-400: #ddbd56;
+}
+
+@layer base {
+  :root {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* Um traço só para todos os ícones lucide. */
+  svg.lucide {
+    stroke-width: 1.5;
+  }
+
+  ::selection {
+    background: #3f3f46;
+    color: #fafafa;
+  }
+
+  /* Foco de teclado visível, fora dos campos que já têm anel próprio. */
+  :where(button, a, [role='switch'], [role='button']):focus-visible {
+    outline: 2px solid rgba(212, 212, 216, 0.7);
+    outline-offset: 2px;
+  }
+}
+
+/* Respeita a preferência do sistema por menos movimento: indicador de
+   gravação, spinner de dispositivos e transições deixam de animar. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Barra de rolagem discreta, na cor do grafite. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(161, 161, 170, 0.16);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(161, 161, 170, 0.3);
+}

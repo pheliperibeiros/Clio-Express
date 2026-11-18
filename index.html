@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Clio - Gravador de Oitivas e Audiências</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/icon-256.png" />
+    <meta name="description" content="Clio - Sistema institucional de gravação de oitivas e audiências com reconhecimento automático de câmeras, estampa probatória no vídeo, gravação tolerante a falhas e emissão de extrato em PDF com hash SHA-256." />
+    <!--
+      Fonts: In a Tauri desktop build, consider bundling fonts locally (via @fontsource packages)
+      to allow full offline operation. For now, the CDN link is preserved for dev convenience.
+      To go fully offline: `npm install @fontsource/plus-jakarta-sans @fontsource/jetbrains-mono`
+      and import them in src/index.css.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body class="bg-zinc-950 text-zinc-100 antialiased font-sans selection:bg-zinc-800 selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

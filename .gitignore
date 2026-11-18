@@ -1,0 +1,27 @@
+# Build outputs
+node_modules/
+dist/
+build/
+coverage/
+
+# Rust / Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log
+
+# AI Studio project metadata (not needed for desktop build)
+.aistudio/
+metadata.json
+
+# Lock file — keep only one (npm)
+bun.lock
