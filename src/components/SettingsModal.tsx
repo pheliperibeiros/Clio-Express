@@ -11,8 +11,6 @@ import {
   Download,
   HardDrive,
   FolderOpen,
-  ChevronDown,
-  ChevronRight,
 } from 'lucide-react';
 import {
   AppSettings,
@@ -27,6 +25,7 @@ import {
 } from '../services/settingsService';
 import { renderReportTemplate } from '../services/reportTemplate';
 import { isTauriEnvironment } from '../services/tauriEnvironment';
+import { HEADER_IMAGE_DATA_URI } from '../services/headerImage';
 import { useDialogA11y } from '../hooks/useDialogA11y';
 import defaultLogoUrl from '../imgs/logo.png';
 import { SealMark } from './SealMark';
@@ -50,7 +49,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [customLogo, setCustomLogo] = useState<string | undefined>(currentSettings.customLogo);
   const [customHeader, setCustomHeader] = useState<string | undefined>(currentSettings.customHeader);
   const [logoError, setLogoError] = useState<string | null>(null);
-  const [showHeaderOptions, setShowHeaderOptions] = useState(false);
+  const [headerError, setHeaderError] = useState<string | null>(null);
   const [storageDirectory, setStorageDirectory] = useState<string>(
     currentSettings.storageDirectory || ''
   );
@@ -218,17 +217,56 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleHeaderUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith('image/')) return;
 
+    if (!file.type.startsWith('image/')) {
+      setHeaderError('Selecione um arquivo de imagem válido (PNG, JPG ou WebP).');
+      return;
+    }
+
+    setHeaderError(null);
     const reader = new FileReader();
     reader.onload = (event) => {
       const rawResult = event.target?.result as string;
-      if (rawResult) {
-        setCustomHeader(rawResult);
-      }
+      if (!rawResult) return;
+
+      // Converte para PNG e limita a largura para garantir compatibilidade
+      // com a geração do PDF (jsPDF) e evitar arquivos de configuração enormes.
+      const img = new Image();
+      img.onload = () => {
+        const maxWidth = 1600;
+        let w = img.width;
+        let h = img.height;
+        if (w <= 0 || h <= 0) {
+          setCustomHeader(rawResult);
+          return;
+        }
+        if (w > maxWidth) {
+          h = Math.round((h * maxWidth) / w);
+          w = maxWidth;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+          setCustomHeader(canvas.toDataURL('image/png'));
+        } else {
+          setCustomHeader(rawResult);
+        }
+      };
+      img.onerror = () => setCustomHeader(rawResult);
+      img.src = rawResult;
     };
     reader.readAsDataURL(file);
     e.target.value = '';
+  };
+
+  const handleRestoreDefaultHeader = () => {
+    setCustomHeader(undefined);
+    setHeaderError(null);
   };
 
   const handleResetToDefault = () => {
@@ -242,6 +280,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setCustomHeader(DEFAULT_SETTINGS.customHeader);
     setStorageDirectory(DEFAULT_SETTINGS.storageDirectory || '');
     setLogoError(null);
+    setHeaderError(null);
   };
 
   const handleExportConfig = () => {
@@ -543,63 +582,64 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 )}
               </div>
             </div>
+          </section>
 
-            {/* Cabeçalho timbrado do extrato */}
-            <div>
-              <button
-                type="button"
-                onClick={() => setShowHeaderOptions(!showHeaderOptions)}
-                className="flex items-center gap-1.5 text-xs text-zinc-400 transition-colors hover:text-zinc-100"
-                aria-expanded={showHeaderOptions}
-              >
-                {showHeaderOptions ? (
-                  <ChevronDown className="h-3.5 w-3.5" />
-                ) : (
-                  <ChevronRight className="h-3.5 w-3.5" />
-                )}
-                <span>Cabeçalho timbrado do extrato (opcional)</span>
-              </button>
-
-              {showHeaderOptions && (
-                <div className="mt-2.5 space-y-2.5 rounded-xl border border-white/[0.06] bg-zinc-950/60 p-3.5">
-                  <p className="text-xs leading-relaxed text-zinc-400">
-                    O cabeçalho é exibido no topo do termo de oitiva e da certidão técnica em PDF.
-                    Você pode anexar uma imagem panorâmica personalizada.
-                  </p>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <input
-                      ref={headerInputRef}
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      onChange={handleHeaderUpload}
-                      className="hidden"
-                      id="custom-header-file-input"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => headerInputRef.current?.click()}
-                      className="flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.08] px-2.5 text-xs text-zinc-300 transition-colors hover:border-white/[0.14] hover:bg-white/[0.04] hover:text-zinc-100"
-                    >
-                      <Upload className="h-4 w-4 text-zinc-400" />
-                      <span>{customHeader ? 'Alterar cabeçalho' : 'Carregar cabeçalho'}</span>
-                    </button>
-                    {customHeader && (
-                      <button
-                        type="button"
-                        onClick={() => setCustomHeader(undefined)}
-                        className="text-xs text-zinc-400 underline decoration-white/20 underline-offset-4 transition-colors hover:text-zinc-100"
-                      >
-                        Restaurar cabeçalho padrão
-                      </button>
-                    )}
-                  </div>
-                  {customHeader && (
-                    <div className="flex max-h-12 items-center justify-center overflow-hidden rounded-md border border-white/[0.08] bg-white p-1">
-                      <img src={customHeader} alt="Prévia do cabeçalho" className="max-h-10 object-contain" />
-                    </div>
-                  )}
-                </div>
+          {/* Cabeçalho dos documentos */}
+          <section className="space-y-3 border-t border-white/[0.06] pt-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-medium text-zinc-100">Cabeçalho dos documentos</h3>
+              {customHeader && (
+                <button
+                  type="button"
+                  onClick={handleRestoreDefaultHeader}
+                  className="flex items-center gap-1.5 text-xs text-zinc-400 transition-colors hover:text-zinc-100"
+                  title="Restaurar o cabeçalho institucional padrão"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span>Restaurar padrão</span>
+                </button>
               )}
+            </div>
+
+            <p className="text-xs leading-relaxed text-zinc-400">
+              Substitui o cabeçalho institucional exibido no topo do termo de oitiva e do extrato,
+              tanto no PDF quanto na impressão. Use uma imagem panorâmica, de preferência na
+              proporção 6:1.
+            </p>
+
+            <div className="flex flex-col gap-4 rounded-xl border border-white/[0.06] bg-zinc-950 p-4 sm:flex-row sm:items-center">
+              <div className="flex min-h-16 flex-1 items-center justify-center overflow-hidden rounded-lg border border-white/[0.06] bg-white p-2">
+                <img
+                  src={customHeader || HEADER_IMAGE_DATA_URI}
+                  alt="Prévia do cabeçalho dos documentos"
+                  className="max-h-16 w-full object-contain"
+                />
+              </div>
+
+              <div className="flex shrink-0 flex-col gap-2 sm:w-48">
+                <input
+                  ref={headerInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={handleHeaderUpload}
+                  className="hidden"
+                  id="custom-header-file-input"
+                />
+                <button
+                  type="button"
+                  onClick={() => headerInputRef.current?.click()}
+                  className="flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/[0.08] px-2.5 text-xs text-zinc-300 transition-colors hover:border-white/[0.14] hover:bg-white/[0.04] hover:text-zinc-100"
+                >
+                  <Upload className="h-4 w-4 text-zinc-400" />
+                  <span>{customHeader ? 'Substituir cabeçalho' : 'Carregar cabeçalho'}</span>
+                </button>
+                <span className="text-center text-xs text-zinc-500">
+                  {customHeader ? 'Cabeçalho personalizado ativo' : 'Cabeçalho institucional padrão'}
+                </span>
+                {headerError && (
+                  <p className="text-center text-xs font-medium text-seal-300">{headerError}</p>
+                )}
+              </div>
             </div>
           </section>
 

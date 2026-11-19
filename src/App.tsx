@@ -35,6 +35,7 @@ import { ExtratoData } from './services/pdfGenerator';
 import { AppSettings, loadSettings, loadSettingsAsync, pickStorageFolder, saveSettings } from './services/settingsService';
 import { renderReportTemplate } from './services/reportTemplate';
 import { getTauri, isTauriEnvironment, filePathToSrc } from './services/tauriEnvironment';
+import { fixWebmDurationBlob, fixWebmDurationFile } from './services/webmDuration';
 
 export default function App() {
   // 0. Institutional Settings (Promotor vs Juiz, Órgão Padrão)
@@ -669,6 +670,7 @@ export default function App() {
         const endedAt = frozen
           ? frozen.endedAt
           : new Date(startedAt.getTime() + durationSeconds * 1000);
+        const durationMs = Math.max(1, endedAt.getTime() - startedAt.getTime());
         frozenStopStateRef.current = null;
 
         // Se o vídeo foi gravado em disco durante a sessão, o nome do arquivo já está definido
@@ -678,6 +680,9 @@ export default function App() {
 
         // Salva/finaliza o vídeo na pasta de Armazenamento Local
         let diskHash: string | null = null; // hash calculado pelo Rust sobre o arquivo em disco
+        let finalTotalBytes = totalBytes;
+        // Blob já corrigido com o Duration (fallback em memória).
+        let fixedBlob: Blob | null = null;
         let savedOnDisk = false;
         let savedPath: string | null = null;
         // true quando `savedPath` é o arquivo final legível (e não um .part)
@@ -704,9 +709,13 @@ export default function App() {
             if (diskStreamOkRef.current && finalPath) {
               const partPath = finalPath + '.part';
               try {
+                // Insere o Duration no cabeçalho antes de hashear/renomear:
+                // sem ele o VLC exibe o vídeo sem duração e não permite avançar.
+                const inserted = await fixWebmDurationFile(partPath, durationMs);
                 // Hash em streaming no Rust + conferência de tamanho (disco == gravado)
                 const info = await tauri.core.invoke('clio_sha256_file', { path: partPath });
-                if (info && info.size === totalBytes) {
+                const expectedSize = totalBytes + (inserted ?? 0);
+                if (info && info.size === expectedSize) {
                   let finalOnDisk = partPath;
                   try {
                     await tauri.core.invoke('clio_rename_file', { from: partPath, to: finalPath });
@@ -716,12 +725,13 @@ export default function App() {
                     alert('O vídeo foi salvo, mas não foi possível renomear o arquivo .part para .webm: ' + partPath);
                   }
                   diskHash = info.sha256;
+                  finalTotalBytes = info.size;
                   savedOnDisk = true;
                   savedPath = finalOnDisk;
                   previewFromDisk = finalOnDisk === finalPath;
                   finalizedOnDisk = true;
                 } else {
-                  console.error('[Clio] Tamanho em disco difere do gravado', info?.size, totalBytes);
+                  console.error('[Clio] Tamanho em disco difere do gravado', info?.size, expectedSize);
                   alert('O arquivo em disco não confere com a gravação (tamanho divergente). Será regravado a partir da memória.');
                 }
               } catch (hashErr) {
@@ -734,9 +744,10 @@ export default function App() {
               const sep = storageDir.includes('/') && !storageDir.includes('\\') ? '/' : '\\';
               const cleanDir = storageDir.replace(/[\\/]+$/, '');
               const targetPath = finalPath ?? `${cleanDir}${sep}${filename}`;
+              fixedBlob = await fixWebmDurationBlob(completeBlob, durationMs);
               await tauri.core.invoke(
                 'clio_write_file_raw',
-                new Uint8Array(await completeBlob.arrayBuffer()),
+                new Uint8Array(await fixedBlob.arrayBuffer()),
                 { headers: { 'x-path': encodeURIComponent(targetPath) } }
               );
               // Remove o .part que ficou de uma tentativa de streaming interrompida.
@@ -745,6 +756,7 @@ export default function App() {
                   await tauri.core.invoke('clio_delete_file', { path: finalPath + '.part' });
                 } catch {}
               }
+              finalTotalBytes = fixedBlob.size;
               savedOnDisk = true;
               savedPath = targetPath;
               previewFromDisk = true;
@@ -774,7 +786,8 @@ export default function App() {
               'Arquivo .part não pôde ser renomeado para .webm'
             ).catch(() => {});
             checkInterruptedSessions().then(setRecoverySessions).catch(() => {});
-            setVideoPreview(URL.createObjectURL(completeBlob));
+            fixedBlob = fixedBlob ?? (await fixWebmDurationBlob(completeBlob, durationMs));
+            setVideoPreview(URL.createObjectURL(fixedBlob));
           }
         } else {
           await markSessionInterrupted(
@@ -783,14 +796,16 @@ export default function App() {
           ).catch(() => {});
           checkInterruptedSessions().then(setRecoverySessions).catch(() => {});
           // Sem arquivo final, o diário é a única cópia: prévia a partir do Blob.
-          setVideoPreview(URL.createObjectURL(completeBlob));
+          fixedBlob = fixedBlob ?? (await fixWebmDurationBlob(completeBlob, durationMs));
+          setVideoPreview(URL.createObjectURL(fixedBlob));
         }
 
         // Libera os chunks da RAM: o Blob da prévia (quando houver) mantém os dados.
         recordedChunksRef.current = [];
 
         // SHA-256: do arquivo em disco quando disponível; senão, do blob em memória
-        const sha256 = diskHash ?? (await computeSha256(completeBlob));
+        const hashBlob = diskHash ? null : fixedBlob ?? (await fixWebmDurationBlob(completeBlob, durationMs));
+        const sha256 = diskHash ?? (await computeSha256(hashBlob ?? completeBlob));
 
         const textoRelatorio = settings.reportTemplate
           ? renderReportTemplate(settings.reportTemplate, {
@@ -808,7 +823,7 @@ export default function App() {
           metadata,
           filename,
           durationSeconds,
-          totalBytes: completeBlob.size,
+          totalBytes: finalTotalBytes,
           sha256,
           startedAt,
           endedAt,
@@ -955,10 +970,16 @@ export default function App() {
       startedAt,
       endedAt,
       durationSeconds,
-      totalBytes,
       interruptionReason,
     } = recovered;
-    const sha256 = await computeSha256(blob);
+    const durationMs = Math.max(
+      1,
+      durationSeconds * 1000,
+      endedAt.getTime() - startedAt.getTime()
+    );
+    // Insere o Duration também na prévia/recuperação para permitir avançar.
+    const fixedBlob = await fixWebmDurationBlob(blob, durationMs);
+    const sha256 = await computeSha256(fixedBlob);
 
     const sessionMeta = recMeta || metadata;
 
@@ -985,7 +1006,7 @@ export default function App() {
       metadata: sessionMeta,
       filename,
       durationSeconds,
-      totalBytes,
+      totalBytes: fixedBlob.size,
       sha256,
       startedAt,
       endedAt,
@@ -997,7 +1018,7 @@ export default function App() {
       textoRelatorio,
     };
 
-    setVideoPreview(URL.createObjectURL(blob));
+    setVideoPreview(URL.createObjectURL(fixedBlob));
     setExtratoData(data);
     setIsRecovering(false);
     setRecoverySessions((prev) => prev.filter((s) => s.session.id !== sessionId));
@@ -1015,6 +1036,11 @@ export default function App() {
         recovered.metadata?.numeroProcesso || '000',
         recovered.startedAt,
         'webm'
+      );
+      const durationMs = Math.max(
+        1,
+        recovered.durationSeconds * 1000,
+        recovered.endedAt.getTime() - recovered.startedAt.getTime()
       );
 
       // Tenta salvar via diálogo nativo (Tauri ou showSaveFilePicker)
@@ -1036,6 +1062,8 @@ export default function App() {
             await tauri.core.invoke('clio_write_file_raw', uint8, {
               headers: { 'x-path': encodeURIComponent(savePath) },
             });
+            // Garante duração no arquivo recuperado (permite avançar no VLC).
+            await fixWebmDurationFile(savePath, durationMs);
             saved = true;
           } else if (savePath === null) {
             // Usuário cancelou o diálogo
@@ -1046,6 +1074,8 @@ export default function App() {
         }
       }
 
+      const fixedBlob = saved ? recovered.blob : await fixWebmDurationBlob(recovered.blob, durationMs);
+
       if (!saved && typeof (window as any).showSaveFilePicker === 'function') {
         try {
           const fileHandle = await (window as any).showSaveFilePicker({
@@ -1053,7 +1083,7 @@ export default function App() {
             types: [{ description: 'Arquivo de Vídeo WebM', accept: { 'video/webm': ['.webm'] } }],
           });
           const writable = await fileHandle.createWritable();
-          await writable.write(recovered.blob);
+          await writable.write(fixedBlob);
           await writable.close();
           saved = true;
         } catch (err: any) {
@@ -1063,7 +1093,7 @@ export default function App() {
 
       if (!saved) {
         // Último recurso: download direto sem escolha de pasta
-        downloadRecoveredVideo(recovered.blob, filename);
+        downloadRecoveredVideo(fixedBlob, filename);
       }
     } catch (err) {
       console.error('Erro ao salvar vídeo recuperado:', err);

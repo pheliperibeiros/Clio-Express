@@ -3,7 +3,7 @@
 // native folder/file picking and direct file writing.
 
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use tauri::ipc::{InvokeBody, Request};
 use tauri::Manager;
@@ -365,6 +365,256 @@ pub async fn clio_sha256_file(path: String) -> Result<serde_json::Value, String>
     })
     .await
     .map_err(|e| format!("Erro ao calcular hash do arquivo: {e}"))?
+}
+
+// ---------------------------------------------------------------------------
+// Duração do WebM
+// ---------------------------------------------------------------------------
+
+const SEGMENT_ID: u64 = 0x1853_8067;
+const INFO_ID: u64 = 0x1549_a966;
+const DURATION_ID: u64 = 0x4489;
+
+struct EbmlElement {
+    id: u64,
+    size_offset: usize,
+    size_length: usize,
+    /// `None` quando o elemento usa tamanho desconhecido (streaming).
+    size: Option<u64>,
+    data_start: usize,
+}
+
+fn read_vint(buf: &[u8], pos: usize, keep_marker: bool) -> Option<(u64, usize, bool)> {
+    if pos >= buf.len() {
+        return None;
+    }
+    let first = buf[pos];
+    if first == 0 {
+        return None;
+    }
+
+    let mut length = 1usize;
+    let mut mask: u8 = 0x80;
+    while length <= 8 && (first & mask) == 0 {
+        length += 1;
+        mask >>= 1;
+    }
+    if length > 8 || pos + length > buf.len() {
+        return None;
+    }
+
+    let mut value: u64 = if keep_marker {
+        first as u64
+    } else {
+        (first & (mask - 1)) as u64
+    };
+    let mut unknown = !keep_marker && (first & (mask - 1)) == mask - 1;
+    for i in 1..length {
+        value = value * 256 + buf[pos + i] as u64;
+        if buf[pos + i] != 0xff {
+            unknown = false;
+        }
+    }
+
+    Some((value, length, unknown))
+}
+
+fn read_element(buf: &[u8], pos: usize) -> Option<EbmlElement> {
+    let (id, id_length, _) = read_vint(buf, pos, true)?;
+    let (size, size_length, unknown) = read_vint(buf, pos + id_length, false)?;
+    Some(EbmlElement {
+        id,
+        size_offset: pos + id_length,
+        size_length,
+        size: if unknown { None } else { Some(size) },
+        data_start: pos + id_length + size_length,
+    })
+}
+
+fn find_info_element(header: &[u8]) -> Option<EbmlElement> {
+    let mut pos = 0usize;
+    while pos < header.len() {
+        let el = read_element(header, pos)?;
+
+        if el.id == SEGMENT_ID {
+            let mut child_pos = el.data_start;
+            let segment_end = match el.size {
+                Some(size) => (el.data_start as u64 + size).min(header.len() as u64) as usize,
+                None => header.len(),
+            };
+
+            while child_pos < segment_end {
+                let child = read_element(header, child_pos)?;
+                if child.id == INFO_ID {
+                    return Some(child);
+                }
+                // Cluster tem tamanho desconhecido e aparece depois do Info.
+                let size = child.size?;
+                let next = child.data_start as u64 + size;
+                if next > header.len() as u64 {
+                    return None;
+                }
+                child_pos = next as usize;
+            }
+            return None;
+        }
+
+        let next = el.data_start as u64 + el.size?;
+        if next > header.len() as u64 {
+            return None;
+        }
+        pos = next as usize;
+    }
+    None
+}
+
+fn patch_webm_duration(path: &Path, duration_ms: u64) -> Result<u64, String> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| format!("Erro ao abrir vídeo para ajustar duração: {e}"))?;
+
+    let file_len = file
+        .metadata()
+        .map_err(|e| format!("Erro ao ler dados do vídeo: {e}"))?
+        .len();
+
+    let read_len = file_len.min(1024 * 1024) as usize;
+    let mut header = vec![0u8; read_len];
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| format!("Erro ao posicionar no vídeo: {e}"))?;
+    file.read_exact(&mut header)
+        .map_err(|e| format!("Erro ao ler cabeçalho do vídeo: {e}"))?;
+
+    let info = find_info_element(&header)
+        .ok_or("Cabeçalho WebM sem o elemento Info: duração não pôde ser ajustada")?;
+    let info_size = info
+        .size
+        .ok_or("Elemento Info com tamanho desconhecido: duração não pôde ser ajustada")?;
+    let info_end = info.data_start as u64 + info_size;
+    if info_end > file_len {
+        return Err("Cabeçalho WebM inconsistente: duração não pôde ser ajustada".into());
+    }
+
+    let duration_value = duration_ms.max(1) as f64;
+
+    // Se o Duration já existir, apenas sobrescreve o valor (sem deslocar bytes).
+    let mut child_pos = info.data_start;
+    while (child_pos as u64) < info_end {
+        let child = match read_element(&header, child_pos) {
+            Some(child) => child,
+            None => break,
+        };
+
+        if child.id == DURATION_ID {
+            match child.size {
+                Some(8) => {
+                    file.seek(SeekFrom::Start(child.data_start as u64))
+                        .map_err(|e| format!("Erro ao posicionar no Duration: {e}"))?;
+                    file.write_all(&duration_value.to_be_bytes())
+                        .map_err(|e| format!("Erro ao gravar Duration: {e}"))?;
+                    file.sync_all()
+                        .map_err(|e| format!("Erro ao sincronizar Duration: {e}"))?;
+                    return Ok(0);
+                }
+                Some(4) => {
+                    file.seek(SeekFrom::Start(child.data_start as u64))
+                        .map_err(|e| format!("Erro ao posicionar no Duration: {e}"))?;
+                    file.write_all(&(duration_value as f32).to_be_bytes())
+                        .map_err(|e| format!("Erro ao gravar Duration: {e}"))?;
+                    file.sync_all()
+                        .map_err(|e| format!("Erro ao sincronizar Duration: {e}"))?;
+                    return Ok(0);
+                }
+                _ => break,
+            }
+        }
+
+        let size = match child.size {
+            Some(size) => size,
+            None => break,
+        };
+        let next = child.data_start as u64 + size;
+        if next > info_end {
+            break;
+        }
+        child_pos = next as usize;
+    }
+
+    // Duration: ID (2 bytes) + tamanho (1 byte) + float64 big-endian (8 bytes).
+    let mut duration_element = [0u8; 11];
+    duration_element[0] = 0x44;
+    duration_element[1] = 0x89;
+    duration_element[2] = 0x88;
+    duration_element[3..11].copy_from_slice(&duration_value.to_be_bytes());
+
+    let inserted = duration_element.len() as u64;
+    let new_info_size = info_size + inserted;
+    let max_size = (1u64 << (7 * info.size_length as u32)) - 2;
+    if new_info_size > max_size {
+        return Err("Elemento Info grande demais para receber a duração".into());
+    }
+
+    // Recalcula o VINT de tamanho do Info preservando a largura original.
+    let mut size_field = vec![0u8; info.size_length];
+    let mut remaining = new_info_size;
+    for i in (0..info.size_length).rev() {
+        size_field[i] = (remaining & 0xff) as u8;
+        remaining >>= 8;
+    }
+    size_field[0] |= 0x80u8 >> (info.size_length - 1);
+
+    // Abre espaço deslocando o restante do arquivo (de trás para frente,
+    // em blocos, para não carregar o vídeo inteiro na memória).
+    let insert_at = info_end;
+    file.set_len(file_len + inserted)
+        .map_err(|e| format!("Erro ao expandir o arquivo de vídeo: {e}"))?;
+
+    let mut shift_buffer = vec![0u8; 8 * 1024 * 1024];
+    let mut end = file_len;
+    while end > insert_at {
+        let start = end.saturating_sub(shift_buffer.len() as u64).max(insert_at);
+        let count = (end - start) as usize;
+
+        file.seek(SeekFrom::Start(start))
+            .map_err(|e| format!("Erro ao posicionar para deslocar o vídeo: {e}"))?;
+        file.read_exact(&mut shift_buffer[..count])
+            .map_err(|e| format!("Erro ao ler bloco do vídeo: {e}"))?;
+
+        file.seek(SeekFrom::Start(start + inserted))
+            .map_err(|e| format!("Erro ao posicionar para deslocar o vídeo: {e}"))?;
+        file.write_all(&shift_buffer[..count])
+            .map_err(|e| format!("Erro ao deslocar bloco do vídeo: {e}"))?;
+
+        end = start;
+    }
+
+    file.seek(SeekFrom::Start(info.size_offset as u64))
+        .map_err(|e| format!("Erro ao posicionar no tamanho do Info: {e}"))?;
+    file.write_all(&size_field)
+        .map_err(|e| format!("Erro ao atualizar tamanho do Info: {e}"))?;
+
+    file.seek(SeekFrom::Start(insert_at))
+        .map_err(|e| format!("Erro ao posicionar para gravar a duração: {e}"))?;
+    file.write_all(&duration_element)
+        .map_err(|e| format!("Erro ao gravar a duração: {e}"))?;
+
+    file.sync_all()
+        .map_err(|e| format!("Erro ao sincronizar o vídeo: {e}"))?;
+
+    Ok(inserted)
+}
+
+/// Insere o elemento Duration no cabeçalho de um WebM gravado pelo
+/// MediaRecorder, permitindo que players (VLC, Windows) exibam a duração e
+/// permitam adiantar/retroceder. Retorna os bytes inseridos (0 se já existia).
+#[tauri::command]
+pub async fn clio_fix_webm_duration(path: String, duration_ms: u64) -> Result<u64, String> {
+    let p = validate_user_path(&path)?;
+    spawn_blocking(move || patch_webm_duration(&p, duration_ms))
+        .await
+        .map_err(|e| format!("Erro ao ajustar duração do vídeo: {e}"))?
 }
 
 /// Renomeia o arquivo finalizado (`.part` -> `.webm`).

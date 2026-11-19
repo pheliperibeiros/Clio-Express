@@ -380,14 +380,15 @@ export function generateExtratoPdf(data: ExtratoData, settings?: Partial<AppSett
 
   const headerHeight = pageWidth / (1651 / 280);
   const subOrgao = data.metadata.orgaoInstituicao
-    ? `${data.metadata.orgaoInstituicao} · Lei nº 11.419/2006`
-    : 'Certidão de Autenticidade e Integridade Digital · Lei nº 11.419/2006';
+    ? data.metadata.orgaoInstituicao
+    : 'Certidão de Autenticidade e Integridade Digital';
 
   const headerImageData = settings?.customHeader || HEADER_IMAGE_DATA_URI;
+  const headerImageFormat = /^data:image\/jpe?g/i.test(headerImageData) ? 'JPEG' : 'PNG';
 
   const drawPageHeader = (title: string): number => {
     try {
-      doc.addImage(headerImageData, 'PNG', 0, 0, pageWidth, headerHeight);
+      doc.addImage(headerImageData, headerImageFormat, 0, 0, pageWidth, headerHeight);
     } catch {
       // Fallback para header padrão se houver qualquer erro de formato
       doc.addImage(HEADER_IMAGE_DATA_URI, 'PNG', 0, 0, pageWidth, headerHeight);
@@ -538,9 +539,17 @@ export function generateExtratoPdf(data: ExtratoData, settings?: Partial<AppSett
   y += 6;
 
   const col1X = margin;
-  const col2X = margin + contentWidth / 2 + 5;
+  const colGap = 6;
+  const colWidth = (contentWidth - colGap) / 2;
+  const col2X = margin + colWidth + colGap;
 
-  const drawField = (label: string, value: string, x: number, currentY: number) => {
+  /**
+   * Desenha rótulo + valor dentro da largura da coluna, quebrando o texto
+   * em múltiplas linhas para que valores longos (ex.: nome da autoridade)
+   * nunca avancem sobre a coluna seguinte.
+   * Retorna a altura total ocupada pelo campo.
+   */
+  const drawField = (label: string, value: string, x: number, currentY: number): number => {
     doc.setFont('times', 'bold');
     doc.setFontSize(8.5);
     doc.setTextColor(71, 85, 105);
@@ -549,21 +558,37 @@ export function generateExtratoPdf(data: ExtratoData, settings?: Partial<AppSett
     doc.setFont('times', 'normal');
     doc.setFontSize(9.5);
     doc.setTextColor(15, 23, 42);
-    const safeVal = value || '—';
-    doc.text(safeVal, x, currentY + 4.5);
+    const lines = doc.splitTextToSize(value || '—', colWidth);
+    lines.forEach((line: string, idx: number) => {
+      doc.text(line, x, currentY + 4.5 + idx * 4);
+    });
+    return 4.5 + Math.max(1, lines.length) * 4;
   };
 
-  drawField('Pessoa Ouvida (Depoente)', data.metadata.nomePessoa, col1X, y);
-  drawField('Qualificação / Condição', data.metadata.qualificacao || 'Testemunha', col2X, y);
-  y += 11;
+  const drawFieldRow = (
+    left: [label: string, value: string],
+    right?: [label: string, value: string]
+  ) => {
+    const leftHeight = drawField(left[0], left[1], col1X, y);
+    const rightHeight = right ? drawField(right[0], right[1], col2X, y) : 0;
+    y += Math.max(leftHeight, rightHeight) + 3;
+  };
 
-  drawField('Documento (CPF / RG)', data.metadata.documento || 'Não informado', col1X, y);
-  drawField('Nº dos Autos / Procedimento', data.metadata.numeroProcesso || 'Não informado', col2X, y);
-  y += 11;
+  drawFieldRow(
+    ['Pessoa Ouvida (Depoente)', data.metadata.nomePessoa],
+    ['Qualificação / Condição', data.metadata.qualificacao || 'Testemunha']
+  );
 
-  drawField('Autoridade Conducente', data.metadata.autoridadeResponsavel || 'Não informado', col1X, y);
-  drawField('Operador / Responsável Técnico', data.metadata.responsavelGravacao || 'Não informado', col2X, y);
-  y += 12;
+  drawFieldRow(
+    ['Documento (CPF / RG)', data.metadata.documento || 'Não informado'],
+    ['Nº dos Autos / Procedimento', data.metadata.numeroProcesso || 'Não informado']
+  );
+
+  drawFieldRow(
+    ['Autoridade Conducente', data.metadata.autoridadeResponsavel || 'Não informado'],
+    ['Operador / Responsável Técnico', data.metadata.responsavelGravacao || 'Não informado']
+  );
+  y += 1;
 
   if (data.metadata.advogados && data.metadata.advogados.length > 0) {
     doc.setFont('times', 'bold');
@@ -599,20 +624,23 @@ export function generateExtratoPdf(data: ExtratoData, settings?: Partial<AppSett
   const startTimeStr = data.startedAt.toLocaleTimeString('pt-BR');
   const endTimeStr = data.endedAt.toLocaleTimeString('pt-BR');
 
-  drawField('Data da Gravação', dateStr, col1X, y);
-  drawField('Horário (Início - Término)', `${startTimeStr} às ${endTimeStr}`, col2X, y);
-  y += 11;
+  drawFieldRow(
+    ['Data da Gravação', dateStr],
+    ['Horário (Início - Término)', `${startTimeStr} às ${endTimeStr}`]
+  );
 
-  drawField('Duração Efetiva', formatDuration(data.durationSeconds), col1X, y);
-  drawField('Tamanho do Arquivo', formatBytes(data.totalBytes), col2X, y);
-  y += 11;
+  drawFieldRow(
+    ['Duração Efetiva', formatDuration(data.durationSeconds)],
+    ['Tamanho do Arquivo', formatBytes(data.totalBytes)]
+  );
 
-  drawField('Resolução & Framerate', `${data.resolution} @ ${data.fps} FPS`, col1X, y);
-  drawField('Formato / Contêiner', data.container || 'WebM / Matroska (Fluxo Tolerante a Falhas)', col2X, y);
-  y += 11;
+  drawFieldRow(
+    ['Resolução & Framerate', `${data.resolution} @ ${data.fps} FPS`],
+    ['Formato / Contêiner', data.container || 'WebM / Matroska (Fluxo Tolerante a Falhas)']
+  );
 
-  drawField('Nome do Arquivo Gerado', data.filename, col1X, y);
-  y += 14;
+  drawFieldRow(['Nome do Arquivo Gerado', data.filename]);
+  y += 3;
 
   // SECTION 3: Hash Criptográfico de Integridade e Autenticidade (SHA-256)
   doc.setFont('times', 'bold');

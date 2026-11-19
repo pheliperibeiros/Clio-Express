@@ -20,6 +20,7 @@ pub fn run() {
             commands::clio_write_file,
             commands::clio_write_file_raw,
             commands::clio_sha256_file,
+            commands::clio_fix_webm_duration,
             commands::clio_rename_file,
             commands::clio_delete_file,
             commands::clio_open_path,

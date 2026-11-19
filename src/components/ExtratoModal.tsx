@@ -402,7 +402,7 @@ export const ExtratoModal: React.FC<ExtratoModalProps> = ({
     h2 { font-size: 11px; font-weight: 700; text-transform: uppercase; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; margin: 14px 0 8px 0; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
     .label { font-size: 9px; font-weight: 700; text-transform: uppercase; color: #475569; }
-    .value { font-size: 11px; color: #0f172a; margin-top: 2px; }
+    .value { font-size: 11px; color: #0f172a; margin-top: 2px; overflow-wrap: anywhere; }
     .sub-block { margin-top: 10px; }
     .adv-item { font-size: 10.5px; margin-top: 3px; }
     .hash-box { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 8px 10px; margin-bottom: 8px; }
@@ -422,7 +422,7 @@ export const ExtratoModal: React.FC<ExtratoModalProps> = ({
     <div>
       <img src="${headerImgUri}" class="header-img" alt="Cabeçalho" />
       <h1 class="title">TERMO DE OITIVA E REGISTRO AUDIOVISUAL</h1>
-      <p class="subtitle">${escapeHtml(meta.orgaoInstituicao || 'Ministério Público')} · Lei nº 11.419/2006</p>
+      <p class="subtitle">${escapeHtml(meta.orgaoInstituicao || 'Ministério Público')}</p>
     </div>
 
     <div class="page-one-body">
@@ -453,7 +453,7 @@ export const ExtratoModal: React.FC<ExtratoModalProps> = ({
   <div class="page-break">
     <img src="${headerImgUri}" class="header-img" alt="Cabeçalho" />
     <h1 class="title">EXTRATO E CERTIDÃO DE REGISTRO AUDIOVISUAL DE OITIVA</h1>
-    <p class="subtitle">${escapeHtml(meta.orgaoInstituicao || 'Ministério Público')} · Lei nº 11.419/2006</p>
+    <p class="subtitle">${escapeHtml(meta.orgaoInstituicao || 'Ministério Público')}</p>
 
     <h2>1. IDENTIFICAÇÃO DA OITIVA E DAS PARTES</h2>
     <div class="grid">
