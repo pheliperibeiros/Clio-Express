@@ -684,3 +684,47 @@ pub fn clio_open_path(path: String) -> Result<(), String> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn patch_webm_duration_inserts_element() {
+        let mut data = Vec::new();
+        // EBML header vazio.
+        data.extend_from_slice(&[0x1A, 0x45, 0xDF, 0xA3, 0x80]);
+        // Segment com tamanho desconhecido.
+        data.extend_from_slice(&[
+            0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        ]);
+        // Info vazio.
+        data.extend_from_slice(&[0x15, 0x49, 0xA9, 0x66, 0x80]);
+        // Cluster com tamanho desconhecido.
+        data.extend_from_slice(&[
+            0x1F, 0x43, 0xB6, 0x75, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        ]);
+
+        let path = std::env::temp_dir().join(format!(
+            "clio_webm_duration_test_{}.webm",
+            std::process::id()
+        ));
+        fs::write(&path, &data).expect("escrever fixture");
+
+        let inserted = patch_webm_duration(&path, 12_345).expect("inserir duração");
+        assert_eq!(inserted, 11);
+
+        let patched = fs::read(&path).expect("ler arquivo corrigido");
+        assert_eq!(patched.len(), data.len() + 11);
+        // Info passa de tamanho 0 para 11 (VINT 0x8B) e recebe o Duration.
+        assert_eq!(patched[21], 0x8B);
+        assert_eq!(
+            &patched[22..33],
+            &[0x44, 0x89, 0x88, 0x40, 0xC8, 0x1C, 0x80, 0x00, 0x00, 0x00, 0x00]
+        );
+        // O Cluster original foi deslocado em 11 bytes.
+        assert_eq!(&patched[33..37], &[0x1F, 0x43, 0xB6, 0x75]);
+
+        let _ = fs::remove_file(&path);
+    }
+}

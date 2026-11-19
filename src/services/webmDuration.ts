@@ -8,7 +8,6 @@ import { getTauri, isTauriEnvironment } from './tauriEnvironment';
  * no arquivo já gravado em disco (comando nativo do Tauri).
  */
 
-const EBML_HEADER_ID = 0x1a45dfa3;
 const SEGMENT_ID = 0x18538067;
 const INFO_ID = 0x1549a966;
 const DURATION_ID = 0x4489;
@@ -92,8 +91,8 @@ function findInfoElement(buf: Uint8Array): EbmlElement | null {
   return null;
 }
 
-function encodeSize(value: number, length: number): Uint8Array {
-  const out = new Uint8Array(length);
+function encodeSize(value: number, length: number): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(new ArrayBuffer(length));
   let remaining = value;
   for (let i = length - 1; i >= 0; i--) {
     out[i] = remaining & 0xff;
@@ -130,7 +129,7 @@ export async function fixWebmDurationBlob(blob: Blob, durationMs: number): Promi
       const child = readElement(header, childPos);
       if (!child) break;
       if (child.id === DURATION_ID && (child.size === 4 || child.size === 8)) {
-        const value = new Uint8Array(child.size);
+        const value = new Uint8Array(new ArrayBuffer(child.size));
         const view = new DataView(value.buffer);
         if (child.size === 8) view.setFloat64(0, durationMsSafe, false);
         else view.setFloat32(0, durationMsSafe, false);
